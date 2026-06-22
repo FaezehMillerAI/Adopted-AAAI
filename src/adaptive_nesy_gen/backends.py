@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Protocol
 
@@ -218,7 +219,15 @@ class CheXagentBackend:
                 break
         if input_ids is None:
             raise ValueError("CheXagent prompt exceeds its context even without retrieval evidence")
-        with self.torch.inference_mode():
+        autocast = (
+            self.torch.autocast(device_type="cuda", dtype=self.torch.bfloat16)
+            if self.torch.cuda.is_available()
+            else nullcontext()
+        )
+        # CheXagent's remote image transform emits FP32 tensors while its frozen
+        # visual encoder is BF16. Trainer supplies autocast during QLoRA; direct
+        # generation must establish the same context explicitly.
+        with self.torch.inference_mode(), autocast:
             output = self.model.generate(
                 input_ids,
                 do_sample=False,
