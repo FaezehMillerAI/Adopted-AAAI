@@ -71,9 +71,24 @@ class MedSigLIPEncoder:
                 token = get_token()
             except ImportError:
                 token = None
-        access_kwargs = {"token": token} if token else {}
+        model_source = model_id
+        local_only = False
+        if token:
+            # Transformers 4.40 can consume ``token`` in AutoProcessor and then
+            # fail to forward it when the concrete processor requests its files.
+            # Resolve the gated repository explicitly and load only local files.
+            from huggingface_hub import snapshot_download
+
+            model_source = snapshot_download(
+                repo_id=model_id,
+                token=token,
+                ignore_patterns=["*.h5", "*.msgpack", "*.onnx", "*.ot", "*.tflite"],
+            )
+            local_only = True
         try:
-            self.processor = AutoProcessor.from_pretrained(model_id, **access_kwargs)
+            self.processor = AutoProcessor.from_pretrained(
+                model_source, local_files_only=local_only
+            )
         except (OSError, ValueError) as exc:
             raise RuntimeError(_medsiglip_access_message(model_id)) from exc
         if torch.cuda.is_available():
@@ -84,7 +99,7 @@ class MedSigLIPEncoder:
             self.dtype = torch.float32
         try:
             self.model = AutoModel.from_pretrained(
-                model_id, torch_dtype=self.dtype, **access_kwargs
+                model_source, torch_dtype=self.dtype, local_files_only=local_only
             )
         except (OSError, ValueError) as exc:
             raise RuntimeError(_medsiglip_access_message(model_id)) from exc
