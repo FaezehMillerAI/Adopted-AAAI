@@ -383,6 +383,17 @@ def main() -> None:
         get_last_checkpoint(str(args.output_dir)) if args.output_dir.exists() else None
     )
     if last_checkpoint:
+        checkpoint_path = Path(last_checkpoint).resolve()
+        output_path = args.output_dir.resolve()
+        if not checkpoint_path.is_relative_to(output_path):
+            raise RuntimeError(
+                f"Refusing to load checkpoint outside output directory: {checkpoint_path}"
+            )
+        # Transformers 4.40 predates PyTorch 2.6's weights_only=True default and
+        # loads its NumPy-containing RNG state without specifying weights_only.
+        # This process-scoped compatibility flag applies only to omitted arguments.
+        # The checkpoint is trusted because it was created under this run's output dir.
+        os.environ["TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"] = "1"
         print(f"Resuming CheXagent QLoRA from {last_checkpoint}", flush=True)
     trainer.train(resume_from_checkpoint=last_checkpoint)
     trainer.save_model(args.output_dir / "adapter")

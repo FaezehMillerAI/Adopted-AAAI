@@ -135,6 +135,12 @@ Checkpoints resume automatically, and the saved adapter is selected by lowest of
 validation loss rather than final-step position. These choices are leakage-safe optimizations, not a
 guarantee of any metric threshold; Cell 8 reports whether official BLEU-1 reaches 0.50.
 
+Checkpoint resumption includes a process-scoped compatibility fix for PyTorch 2.6 and
+newer. CheXagent requires Transformers 4.40, whose RNG-state loader predates PyTorch's
+restricted `weights_only=True` default. The trainer permits legacy pickle loading only
+after verifying that the checkpoint resolves inside the configured output directory;
+never point `--output-dir` at an untrusted checkpoint tree.
+
 BF16 is checked before the model download. A T4 is not sufficient for this stated
 precision policy; select an A100, L4, or another BF16-capable GPU. Cell 5 records a full
 traceback in `training_error.log` beside the adapter if its subprocess fails.
