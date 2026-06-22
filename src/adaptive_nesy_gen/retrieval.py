@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import os
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -62,8 +63,17 @@ class MedSigLIPEncoder:
         self.batch_size = batch_size
         self.progress_callback = progress_callback
         self.show_progress = show_progress
+        token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+        if not token:
+            try:
+                from huggingface_hub import get_token
+
+                token = get_token()
+            except ImportError:
+                token = None
+        access_kwargs = {"token": token} if token else {}
         try:
-            self.processor = AutoProcessor.from_pretrained(model_id)
+            self.processor = AutoProcessor.from_pretrained(model_id, **access_kwargs)
         except (OSError, ValueError) as exc:
             raise RuntimeError(_medsiglip_access_message(model_id)) from exc
         if torch.cuda.is_available():
@@ -73,7 +83,9 @@ class MedSigLIPEncoder:
         else:
             self.dtype = torch.float32
         try:
-            self.model = AutoModel.from_pretrained(model_id, torch_dtype=self.dtype)
+            self.model = AutoModel.from_pretrained(
+                model_id, torch_dtype=self.dtype, **access_kwargs
+            )
         except (OSError, ValueError) as exc:
             raise RuntimeError(_medsiglip_access_message(model_id)) from exc
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 from typing import Protocol
@@ -89,11 +90,20 @@ class MedGemmaBackend:
         }
         if load_in_4bit and torch.cuda.is_available():
             model_kwargs["quantization_config"] = BitsAndBytesConfig(load_in_4bit=True)
+        token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+        if not token:
+            try:
+                from huggingface_hub import get_token
+
+                token = get_token()
+            except ImportError:
+                token = None
         self.pipe = pipeline(
             "image-text-to-text",
             model=model_id,
             device_map="auto",
             model_kwargs=model_kwargs,
+            token=token,
         )
         self.max_new_tokens = max_new_tokens
         self.use_retrieval = use_retrieval
