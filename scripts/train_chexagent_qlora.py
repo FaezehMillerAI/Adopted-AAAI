@@ -243,6 +243,7 @@ def main() -> None:
     parser.add_argument("--lora-rank", type=int, default=16)
     parser.add_argument("--rag-probability", type=float, default=0.5)
     parser.add_argument("--dataloader-workers", type=int, default=4)
+    parser.add_argument("--progress-file", type=Path)
     args = parser.parse_args()
 
     import peft
@@ -254,6 +255,7 @@ def main() -> None:
         AutoTokenizer,
         BitsAndBytesConfig,
         Trainer,
+        TrainerCallback,
         TrainingArguments,
     )
     from transformers.trainer_utils import get_last_checkpoint
@@ -347,6 +349,45 @@ def main() -> None:
         train, tokenizer, args.max_length, neighbours, args.rag_probability
     )
     val_dataset = ReportDataset(validation, tokenizer, args.max_length, None, 0.0)
+
+    class JsonProgressCallback(TrainerCallback):
+        def __init__(self, path: Path):
+            self.path = path
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+
+        def write(self, state, stage: str, **metrics) -> None:
+            payload = {
+                "completed": int(state.global_step),
+                "total": int(state.max_steps),
+                "stage": stage,
+                **metrics,
+            }
+            temporary = self.path.with_suffix(self.path.suffix + ".tmp")
+            temporary.write_text(json.dumps(payload), encoding="utf-8")
+            temporary.replace(self.path)
+
+        def on_train_begin(self, args, state, control, **kwargs):
+            self.write(state, "training")
+
+        def on_step_end(self, args, state, control, **kwargs):
+            self.write(state, "training")
+
+        def on_log(self, args, state, control, logs=None, **kwargs):
+            numeric = {
+                key: round(float(value), 6)
+                for key, value in (logs or {}).items()
+                if isinstance(value, (int, float)) and key in {"loss", "eval_loss"}
+            }
+            self.write(state, "training", **numeric)
+
+        def on_evaluate(self, args, state, control, metrics=None, **kwargs):
+            eval_loss = (metrics or {}).get("eval_loss")
+            details = {"eval_loss": round(float(eval_loss), 6)} if eval_loss is not None else {}
+            self.write(state, "evaluation complete", **details)
+
+        def on_train_end(self, args, state, control, **kwargs):
+            self.write(state, "complete")
+
     training_args = TrainingArguments(
         output_dir=str(args.output_dir),
         max_steps=args.max_steps,
@@ -378,6 +419,7 @@ def main() -> None:
         train_dataset=train_dataset,
         eval_dataset=val_dataset,
         data_collator=CausalCollator(tokenizer.pad_token_id),
+        callbacks=[JsonProgressCallback(args.progress_file)] if args.progress_file else None,
     )
     last_checkpoint = (
         get_last_checkpoint(str(args.output_dir)) if args.output_dir.exists() else None
