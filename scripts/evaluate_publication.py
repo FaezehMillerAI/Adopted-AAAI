@@ -32,6 +32,26 @@ def load_jsonl(path: Path) -> list[dict[str, Any]]:
         return [json.loads(line) for line in handle if line.strip()]
 
 
+def select_evaluation_ids(
+    records_by_method: dict[str, list[dict[str, Any]]],
+    official_ids: set[str],
+    allow_incomplete: bool,
+) -> set[str]:
+    if not allow_incomplete:
+        return official_ids
+    observed = {
+        method: {str(record["example_id"]) for record in records}
+        for method, records in records_by_method.items()
+    }
+    unknown = set().union(*observed.values()) - official_ids
+    if unknown:
+        raise ValueError(f"Smoke predictions contain non-test IDs: {sorted(unknown)[:3]}")
+    common = set.intersection(*observed.values())
+    if not common:
+        raise ValueError("Smoke evaluation requires at least one common prediction")
+    return common
+
+
 def load_official_scorers() -> dict[str, Any]:
     """Load heavyweight official evaluators once for reuse across every ablation."""
     try:
@@ -339,6 +359,11 @@ def main() -> None:
     parser.add_argument("--bootstrap-samples", type=int, default=2000)
     parser.add_argument("--expert-sample-size", type=int, default=100)
     parser.add_argument("--seed", type=int, default=13)
+    parser.add_argument(
+        "--allow-incomplete",
+        action="store_true",
+        help="evaluate only common available test IDs and label output as non-publication smoke",
+    )
     args = parser.parse_args()
 
     studies = load_manifest(args.manifest)
@@ -357,6 +382,18 @@ def main() -> None:
     if not files:
         raise FileNotFoundError(f"No ablation JSONL files in {args.predictions_dir}")
     records_by_method = {path.stem: load_jsonl(path) for path in files}
+    evaluation_ids = select_evaluation_ids(
+        records_by_method, set(references), args.allow_incomplete
+    )
+    if args.allow_incomplete:
+        records_by_method = {
+            method: [
+                record
+                for record in records
+                if str(record["example_id"]) in evaluation_ids
+            ]
+            for method, records in records_by_method.items()
+        }
     graph = KnowledgeGraph.from_cache(args.primekg_cache)
     linker = DeterministicLinker.from_knowledge_graph(graph)
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -374,7 +411,7 @@ def main() -> None:
             method,
             records,
             references,
-            set(references),
+            evaluation_ids,
             training_reports,
             linker,
             scorers,
@@ -386,15 +423,24 @@ def main() -> None:
         samples=args.bootstrap_samples,
         seed=args.seed,
     )
-    write_expert_review_packets(
-        records_by_method,
-        studies_by_id,
-        linker,
-        args.output_dir,
-        args.expert_sample_size,
-        args.seed,
-    )
+    selected_studies = {
+        example_id: studies_by_id[example_id] for example_id in evaluation_ids
+    }
+    if not args.allow_incomplete:
+        write_expert_review_packets(
+            records_by_method,
+            selected_studies,
+            linker,
+            args.output_dir,
+            args.expert_sample_size,
+            args.seed,
+        )
     publication = {
+        "evaluation_scope": (
+            "SMOKE_SUBSET_NON_PUBLICATION"
+            if args.allow_incomplete
+            else "FULL_OFFICIAL_TEST"
+        ),
         "reference_firewall": (
             "Test references were loaded only by this post-inference evaluator; inference JSONL "
             "files contain no reference field."
@@ -406,22 +452,32 @@ def main() -> None:
             "Traces are procedural inference records, not complete causal explanations."
         ),
         "bootstrap_estimand": "paired mean per-study metric difference",
-        "expert_review_status": "PENDING_HUMAN_REVIEW",
+        "expert_review_status": (
+            "NOT_RUN_FOR_SMOKE_SUBSET"
+            if args.allow_incomplete
+            else "PENDING_HUMAN_REVIEW"
+        ),
         "linker_accuracy_status": "PENDING_EXPERT_ADJUDICATION",
         "claim_policy": (
             "Do not claim hallucination reduction until the blinded expert packet is completed "
             "and adjudicated."
         ),
         "linker_reference_audit": linker_structural_audit(
-            [study.report for study in test], linker
+            [study.report for study in selected_studies.values()], linker
         ),
         "methods": summaries,
         "paired_bootstrap_vs_baseline": intervals,
     }
-    (args.output_dir / "publication_metrics.json").write_text(
+    metrics_name = "smoke_metrics.json" if args.allow_incomplete else "publication_metrics.json"
+    (args.output_dir / metrics_name).write_text(
         json.dumps(publication, indent=2) + "\n", encoding="utf-8"
     )
-    with (args.output_dir / "per_study_metrics.jsonl").open("w", encoding="utf-8") as handle:
+    rows_name = (
+        "smoke_per_study_metrics.jsonl"
+        if args.allow_incomplete
+        else "per_study_metrics.jsonl"
+    )
+    with (args.output_dir / rows_name).open("w", encoding="utf-8") as handle:
         for rows in per_method.values():
             for row in rows:
                 handle.write(json.dumps(row) + "\n")

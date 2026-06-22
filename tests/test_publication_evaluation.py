@@ -4,6 +4,7 @@ from scripts.evaluate_publication import (
     official_chexbert_metrics,
     official_coco_metrics,
     official_radgraph_metrics,
+    select_evaluation_ids,
 )
 
 
@@ -61,3 +62,16 @@ def test_official_metric_adapters_preserve_corpus_and_per_study_values():
     )
     assert radgraph["radgraph_entity_relation"] == 0.35
     assert radgraph_rows[1]["radgraph_complete"] == 0.6
+
+
+def test_smoke_evaluation_selects_common_official_ids():
+    records = {
+        "a": [{"example_id": "one"}, {"example_id": "two"}],
+        "b": [{"example_id": "two"}, {"example_id": "three"}],
+    }
+    assert select_evaluation_ids(records, {"one", "two", "three"}, True) == {"two"}
+    assert select_evaluation_ids(records, {"one", "two", "three"}, False) == {
+        "one",
+        "two",
+        "three",
+    }
