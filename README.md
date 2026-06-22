@@ -167,9 +167,10 @@ python scripts/train_chexagent_qlora.py \
    Run MedGemma in a fresh runtime because its Transformers version is incompatible with
    CheXagent's released remote code.
 
-The notebook selects batch size 4 with four-step accumulation on an A100-class GPU,
-uses four data-loader workers, caches training neighbours, resumes checkpoints and JSONL
-outputs, and keeps all durable artifacts on Drive. A one-day completion target depends on
+The notebook selects batch size 8 with two-step accumulation on an 80 GB A100, or batch
+size 4 with four-step accumulation on a 40 GB A100. It uses four data-loader workers,
+caches training neighbours, resumes checkpoints and JSONL outputs, and keeps all durable
+artifacts on Drive. A one-day completion target depends on
 dataset size, Drive throughput, gated-model download speed, and Colab session stability;
 it is an execution target rather than a guaranteed wall-clock bound.
 
