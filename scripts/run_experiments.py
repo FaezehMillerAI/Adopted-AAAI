@@ -70,6 +70,18 @@ def completed_example_ids(path: Path) -> set[str]:
     return completed
 
 
+def write_progress(path: Path | None, completed: int, total: int, stage: str) -> None:
+    if path is None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps({"completed": completed, "total": total, "stage": stage}),
+        encoding="utf-8",
+    )
+    temporary.replace(path)
+
+
 def backend_from_args(args):
     if args.backend == "chexagent":
         return CheXagentBackend(
@@ -126,6 +138,7 @@ def main() -> None:
     parser.add_argument("--top-k", type=int, default=5)
     parser.add_argument("--limit", type=int)
     parser.add_argument("--exclude-same-patient", action="store_true")
+    parser.add_argument("--progress-file", type=Path)
     parser.add_argument(
         "--graph-control", choices=["none", "relation-ablated", "shuffled"], default="none"
     )
@@ -152,10 +165,13 @@ def main() -> None:
         raise ValueError("Manifest must contain train and test rows")
     if any(study.report for study in test):
         raise AssertionError("Test-reference firewall failed")
+    selected_test = test[: args.limit]
+    write_progress(args.progress_file, 0, len(selected_test), "loading MedSigLIP")
     encoder = MedSigLIPEncoder()
     index_started = time.perf_counter()
     index = VisualIndex.load(args.medsiglip_cache, encoder, studies=studies)
     index_load_ms = (time.perf_counter() - index_started) * 1000.0
+    write_progress(args.progress_file, 0, len(selected_test), "loading index and graph")
     original_graph = KnowledgeGraph.from_cache(args.primekg_cache)
     linker = (
         DeterministicLinker.from_json(args.lexicon)
@@ -172,6 +188,7 @@ def main() -> None:
     if args.ablation not in configs:
         raise ValueError(f"Unknown ablation {args.ablation}; choose from {sorted(configs)}")
     config = configs[args.ablation]
+    write_progress(args.progress_file, 0, len(selected_test), "loading generator")
     shared_backend = backend_from_args(args)
     drafts = load_drafts(args.drafts_jsonl)
     if args.suite:
@@ -187,7 +204,6 @@ def main() -> None:
         )
         return
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    selected_test = test[: args.limit]
     completed = completed_example_ids(args.output) if args.resume else set()
     mode = "a" if args.resume else "w"
     remaining_test = [
@@ -195,12 +211,20 @@ def main() -> None:
     ]
     if completed:
         print(f"Resuming {args.output}: {len(completed)} examples already complete", flush=True)
+    already_complete = len(selected_test) - len(remaining_test)
+    write_progress(
+        args.progress_file, already_complete, len(selected_test), "generating reports"
+    )
     with args.output.open(mode, encoding="utf-8") as handle:
-        for study in tqdm(
-            remaining_test,
-            desc="Generating and verifying reports",
-            unit="study",
-            dynamic_ncols=True,
+        for offset, study in enumerate(
+            tqdm(
+                remaining_test,
+                desc="Generating and verifying reports",
+                unit="study",
+                dynamic_ncols=True,
+                disable=args.progress_file is not None,
+            ),
+            start=1,
         ):
             replay_key = manifest_example_id(study)
             if args.backend == "replay":
@@ -226,6 +250,13 @@ def main() -> None:
             )
             handle.write(json.dumps(record) + "\n")
             handle.flush()
+            write_progress(
+                args.progress_file,
+                already_complete + offset,
+                len(selected_test),
+                "generating reports",
+            )
+    write_progress(args.progress_file, len(selected_test), len(selected_test), "complete")
 
 
 def _run_suite(args, test, index, linker, graph, configs, drafts, index_load_ms):

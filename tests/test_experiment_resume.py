@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from scripts.run_experiments import completed_example_ids
+from scripts.run_experiments import completed_example_ids, write_progress
 
 
 def test_completed_example_ids_accepts_interrupted_valid_jsonl(tmp_path):
@@ -36,3 +36,13 @@ def test_completed_example_ids_rejects_unsafe_resume_files(tmp_path, contents, m
     output.write_text(contents, encoding="utf-8")
     with pytest.raises(ValueError, match=message):
         completed_example_ids(output)
+
+
+def test_write_progress_atomically_records_stage(tmp_path):
+    path = tmp_path / "progress.json"
+    write_progress(path, completed=3, total=10, stage="generating reports")
+    assert json.loads(path.read_text(encoding="utf-8")) == {
+        "completed": 3,
+        "total": 10,
+        "stage": "generating reports",
+    }
