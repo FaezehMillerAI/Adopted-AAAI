@@ -82,7 +82,13 @@ class MedSigLIPEncoder:
             model_source = snapshot_download(
                 repo_id=model_id,
                 token=token,
-                ignore_patterns=["*.h5", "*.msgpack", "*.onnx", "*.ot", "*.tflite"],
+                allow_patterns=[
+                    "*.json",
+                    "*.model",
+                    "*.py",
+                    "*.safetensors",
+                    "*.txt",
+                ],
             )
             local_only = True
         try:
